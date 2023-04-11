@@ -22,12 +22,11 @@ default_room_id = 'd8a4e0c5-7c79-4145-900e-83a9f06fcb6a'
 netdata_api_token = st.sidebar.text_input('netdata_api_token', value=netdata_api_token)
 space_id = st.sidebar.text_input('space_id', value=default_space_id)
 room_id = st.sidebar.text_input('room_id', value=default_room_id)
-node_id_list = st.sidebar.text_input('node_id_list', value='').split(',')
-contexts_regex = st.sidebar.text_input('contexts_regex', value='system\..*')
-after = st.sidebar.number_input('after', value=-60*10)
+contexts_regex = st.sidebar.text_input('contexts_regex', value='system|apps|users\..*')
+after = st.sidebar.number_input('after', value=-60*15)
 before = st.sidebar.number_input('before', value=0)
-freq = st.sidebar.text_input('freq', value='10s')
-n_clusters = st.sidebar.number_input('n_clusters', value=5)
+freq = st.sidebar.text_input('freq', value='15s')
+n_clusters = st.sidebar.number_input('n_clusters', value=15)
 fig_w = st.sidebar.number_input('fig_w', value=900)
 fig_h = st.sidebar.number_input('fig_h', value=25)
 
@@ -47,10 +46,9 @@ for context in contexts_matched:
     try:
         df_context = get_data_cloud(space_id, room_id, context, after, before, freq=freq)
         df_context = df_context.add_prefix(f'{context}.')
+        df = df.merge(df_context,how='outer',on='time')
     except:
-        df_context = pd.DataFrame(columns=['time'])
-    
-    df = df.merge(df_context,how='outer',on='time')
+        print(f'error on context={context}')    
 
 df = df.set_index('time')
 
@@ -65,29 +63,35 @@ df = ( df-df.min() ) / ( df.max() - df.min() )
 # ffill and bfill any missing data
 df = df.ffill().bfill()
 
+# drop any columns that are all NaN
+df = df.dropna(axis=1,how='all')
+
 # get X matrix to feed into clustering
 X = df.transpose().dropna().values
 
 #%%
 
 # cluster the data
-kmeans = KMeans(n_clusters=n_clusters, n_init="auto").fit(X)
+cluster = KMeans(n_clusters=n_clusters, n_init=5).fit(X)
 
 # sort based on clustering
-cols_sorted = pd.DataFrame(
-            zip(df.columns, kmeans.labels_),
-            columns=['metric', 'cluster']
-        ).sort_values('cluster')['metric'].values.tolist()
-
+df_cols_sorted = pd.DataFrame(
+    zip(df.columns, cluster.labels_),
+    columns=['metric', 'cluster']
+    ).sort_values('cluster')
+cols_sorted = df_cols_sorted['metric'].values.tolist()
+cols_renamed = [f'{c} ({i})' for c,i in zip(df_cols_sorted['metric'].values, df_cols_sorted['cluster'].values)]
 df = df[cols_sorted]
+df.columns = cols_renamed
 
+# create heatmap fig
 fig = px.imshow(df.transpose(), color_continuous_scale='Greens')
 fig.update_layout(
             autosize=False,
             width=fig_w,
             height=len(df.columns)*fig_h)
-st.plotly_chart(fig)
 
-#%%
+# plot the heatmap
+st.plotly_chart(fig)
 
 #%%

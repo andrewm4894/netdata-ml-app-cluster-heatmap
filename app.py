@@ -2,7 +2,7 @@
 
 import streamlit as st
 import pandas as pd
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN
 from netdata_pandas.data_cloud import get_data_cloud, get_charts_cloud
 import plotly.express as px
 import re
@@ -19,6 +19,7 @@ default_space_id = 'ea93d7b8-0df6-45c0-b13d-1560996c89eb'
 default_room_id = 'd8a4e0c5-7c79-4145-900e-83a9f06fcb6a'
 
 # inputs
+run = st.sidebar.button('Run')
 netdata_api_token = st.sidebar.text_input('netdata_api_token', value=netdata_api_token)
 space_id = st.sidebar.text_input('space_id', value=default_space_id)
 room_id = st.sidebar.text_input('room_id', value=default_room_id)
@@ -40,58 +41,59 @@ contexts_matched = [context for context in contexts_cloud if pattern.match(conte
 
 #%%
 
-# get data from netdata cloud
-df = pd.DataFrame(columns=['time'])
-for context in contexts_matched:
-    try:
-        df_context = get_data_cloud(space_id, room_id, context, after, before, freq=freq)
-        df_context = df_context.add_prefix(f'{context}.')
-        df = df.merge(df_context,how='outer',on='time')
-    except:
-        print(f'error on context={context}')    
+if run:
 
-df = df.set_index('time')
+    # get data from netdata cloud
+    df = pd.DataFrame(columns=['time'])
+    for context in contexts_matched:
+        try:
+            df_context = get_data_cloud(space_id, room_id, context, after, before, freq=freq)
+            df_context = df_context.add_prefix(f'{context}.')
+            df = df.merge(df_context,how='outer',on='time')
+        except:
+            print(f'error on context={context}')    
 
-print(df.shape)
+    df = df.set_index('time')
 
-#%%
+    print(df.shape)
 
-# normalize each column to be 0 to 1
-# https://en.wikipedia.org/wiki/Feature_scaling#Rescaling_(min-max_normalization)
-df = ( df-df.min() ) / ( df.max() - df.min() )
+    # normalize each column to be 0 to 1
+    # https://en.wikipedia.org/wiki/Feature_scaling#Rescaling_(min-max_normalization)
+    df = ( df-df.min() ) / ( df.max() - df.min() )
 
-# ffill and bfill any missing data
-df = df.ffill().bfill()
+    # ffill and bfill any missing data
+    df = df.ffill().bfill()
 
-# drop any columns that are all NaN
-df = df.dropna(axis=1,how='all')
+    # drop any columns that are all NaN
+    df = df.dropna(axis=1,how='all')
 
-# get X matrix to feed into clustering
-X = df.transpose().dropna().values
+    # get X matrix to feed into clustering
+    X = df.transpose().dropna().values
 
-#%%
+    # cluster the data
+    cluster = KMeans(n_clusters=n_clusters, n_init=5).fit(X)
 
-# cluster the data
-cluster = KMeans(n_clusters=n_clusters, n_init=5).fit(X)
+    # sort based on clustering
+    df_cols_sorted = pd.DataFrame(
+        zip(df.columns, cluster.labels_),
+        columns=['metric', 'cluster']
+        ).sort_values('cluster', ascending=False)
+    cols_sorted = df_cols_sorted['metric'].values.tolist()
+    cols_renamed = [f'{c} ({i})' for c,i in zip(df_cols_sorted['metric'].values, df_cols_sorted['cluster'].values)]
+    df = df[cols_sorted]
+    df.columns = cols_renamed
 
-# sort based on clustering
-df_cols_sorted = pd.DataFrame(
-    zip(df.columns, cluster.labels_),
-    columns=['metric', 'cluster']
-    ).sort_values('cluster')
-cols_sorted = df_cols_sorted['metric'].values.tolist()
-cols_renamed = [f'{c} ({i})' for c,i in zip(df_cols_sorted['metric'].values, df_cols_sorted['cluster'].values)]
-df = df[cols_sorted]
-df.columns = cols_renamed
+    # create heatmap fig
+    fig = px.imshow(df.transpose(), color_continuous_scale='Greens')
+    fig.update_layout(
+                autosize=False,
+                width=fig_w,
+                height=len(df.columns)*fig_h)
 
-# create heatmap fig
-fig = px.imshow(df.transpose(), color_continuous_scale='Greens')
-fig.update_layout(
-            autosize=False,
-            width=fig_w,
-            height=len(df.columns)*fig_h)
+    # plot the heatmap
+    st.plotly_chart(fig)
 
-# plot the heatmap
-st.plotly_chart(fig)
+else:
+    st.write('Click Run to generate the heatmap')
 
 #%%
